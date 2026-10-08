@@ -1,0 +1,156 @@
+import { useState, useEffect } from 'react';
+import { auth } from '../firebase.js';
+import { signOut } from 'firebase/auth';
+import { fetchWithAuth } from '../api.js';
+
+interface Integration {
+  provider: string;
+  connected: boolean;
+  username?: string;
+}
+
+export default function Settings() {
+  const [integrations, setIntegrations] = useState<Integration[]>([
+    { provider: 'GitHub', connected: false },
+    { provider: 'Kubernetes', connected: true, username: 'local-cluster' },
+    { provider: 'Prometheus', connected: true, username: 'local-prometheus' },
+  ]);
+
+  const [_loading, _setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadIntegrations() {
+      try {
+        const response = await fetchWithAuth('http://localhost:3000/api/integrations');
+        if (response.ok) {
+          const body = await response.json();
+          if (!cancelled && body.data) {
+            setIntegrations((prev) =>
+              prev.map((i) => {
+                const remote = body.data.find(
+                  (d: { provider: string }) =>
+                    d.provider.toLowerCase() === i.provider.toLowerCase(),
+                );
+                if (remote) {
+                  return { ...i, connected: true };
+                }
+                return i;
+              }),
+            );
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load integrations', err);
+      }
+    }
+    loadIntegrations();
+
+    // Listen for the OAuth success message from the popup window
+    const handleMessage = async (event: MessageEvent) => {
+      // In production, you should verify event.origin here
+      if (event.data?.type === 'GITHUB_OAUTH_SUCCESS') {
+        setIntegrations((prev) =>
+          prev.map((i) => (i.provider === 'GitHub' ? { ...i, connected: true } : i)),
+        );
+      } else if (event.data?.type === 'GITHUB_OAUTH_ERROR') {
+        console.error('GitHub OAuth failed:', event.data.error);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('message', handleMessage);
+    };
+  }, []);
+
+  const handleConnectGitHub = async () => {
+    try {
+      const res = await fetchWithAuth('http://localhost:3000/api/auth/github/url');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) {
+          window.open(data.url, 'GitHub OAuth', 'width=600,height=600');
+        }
+      } else {
+        console.error('Failed to get GitHub OAuth URL');
+      }
+    } catch (err) {
+      console.error('Error starting GitHub OAuth', err);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
+
+  return (
+    <div className="animate-fade-in max-w-4xl mx-auto mt-8 space-y-6">
+      <div className="glass-panel rounded-xl p-8 border-brand-primary/20">
+        <div className="flex justify-between items-start mb-8 pb-6 border-b border-brand-primary/20">
+          <div className="flex items-center gap-6">
+            <div className="w-20 h-20 rounded-full bg-brand-primary/20 border-2 border-brand-primary/40 flex items-center justify-center text-3xl text-brand-primary shadow-[0_0_15px_rgba(0,240,255,0.2)]">
+              {auth.currentUser?.email?.[0].toUpperCase() || 'U'}
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold text-white mb-1">
+                {auth.currentUser?.displayName || 'Developer'}
+              </h1>
+              <p className="text-brand-muted text-lg mb-2">{auth.currentUser?.email}</p>
+              <span className="px-3 py-1 text-xs font-semibold uppercase tracking-wider bg-brand-success/10 text-brand-success border border-brand-success/30 rounded-full">
+                Active Session
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="px-4 py-2 bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition-colors font-medium"
+          >
+            Sign Out
+          </button>
+        </div>
+
+        <div className="mt-8 space-y-6">
+          <h2 className="text-xl font-semibold text-white">Connected Services</h2>
+
+          <div className="space-y-4">
+            {integrations.map((integration) => (
+              <div
+                key={integration.provider}
+                className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10"
+              >
+                <div className="flex items-center gap-4">
+                  <div
+                    className={`w-3 h-3 rounded-full ${integration.connected ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-gray-500'}`}
+                  />
+                  <div>
+                    <h3 className="text-white font-medium">{integration.provider}</h3>
+                    <p className="text-brand-muted text-sm">
+                      {integration.connected
+                        ? `Connected as ${integration.username || 'user'}`
+                        : 'Not connected'}
+                    </p>
+                  </div>
+                </div>
+
+                {integration.provider === 'GitHub' && !integration.connected ? (
+                  <button
+                    onClick={handleConnectGitHub}
+                    className="px-4 py-2 bg-brand-primary hover:bg-brand-primary/90 text-white rounded-lg transition-colors text-sm font-medium"
+                  >
+                    Connect
+                  </button>
+                ) : (
+                  <button className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-lg transition-colors text-sm font-medium">
+                    {integration.connected ? 'Manage' : 'Connect'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
